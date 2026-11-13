@@ -88,22 +88,69 @@ class BackendAuthIntegrationTest {
     }
 
     @Test
-    fun backendConfigRejectsEmulatorPrivateAndNonHttpsUrls() {
-        assertTrue(BackendConfig.validateBaseUrl("") is BackendUrlStatus.NotConfigured)
-        assertTrue(BackendConfig.validateBaseUrl("https://REPLACE_WITH_URL") is BackendUrlStatus.NotConfigured)
-        assertTrue(BackendConfig.validateBaseUrl("https://your-deployed-backend.example.com/") is BackendUrlStatus.NotConfigured)
-        assertTrue(BackendConfig.validateBaseUrl("http://10.0.2.2:8000/") is BackendUrlStatus.Invalid)
-        assertTrue(BackendConfig.validateBaseUrl("http://localhost:8000/") is BackendUrlStatus.Invalid)
-        assertTrue(BackendConfig.validateBaseUrl("https://192.168.1.50:8000/") is BackendUrlStatus.Invalid)
-        assertTrue(BackendConfig.validateBaseUrl("http://api.zenoai.example.com/") is BackendUrlStatus.Invalid)
+    fun backendConfigValidatesDebugAndReleaseUrlsAndPreservesErrorMapping() {
+        // Placeholder & empty URLs must always be rejected (both debug and release)
+        for (isDebug in listOf(true, false)) {
+            assertTrue(BackendConfig.validateBaseUrl("", isDebugBuild = isDebug) is BackendUrlStatus.NotConfigured)
+            assertTrue(BackendConfig.validateBaseUrl("https://REPLACE_WITH_URL", isDebugBuild = isDebug) is BackendUrlStatus.NotConfigured)
+            assertTrue(BackendConfig.validateBaseUrl("https://your-deployed-backend.example.com/", isDebugBuild = isDebug) is BackendUrlStatus.NotConfigured)
+            assertTrue(BackendConfig.validateBaseUrl("http://placeholder.local:8000/", isDebugBuild = isDebug) is BackendUrlStatus.NotConfigured)
+        }
 
-        val valid = BackendConfig.validateBaseUrl("https://api.zenoai.example.com")
-        assertTrue(valid is BackendUrlStatus.Valid)
-        assertEquals("https://api.zenoai.example.com/", (valid as BackendUrlStatus.Valid).normalizedUrl)
+        // Debug builds accept http://10.0.2.2:8000/ and localhost/private local dev URLs
+        val debugEmulator = BackendConfig.validateBaseUrl("http://10.0.2.2:8000/", isDebugBuild = true)
+        assertTrue(debugEmulator is BackendUrlStatus.Valid)
+        assertEquals("http://10.0.2.2:8000/", (debugEmulator as BackendUrlStatus.Valid).normalizedUrl)
 
+        val debugEmulatorNoSlash = BackendConfig.validateBaseUrl("http://10.0.2.2:8000", isDebugBuild = true)
+        assertTrue(debugEmulatorNoSlash is BackendUrlStatus.Valid)
+        assertEquals("http://10.0.2.2:8000/", (debugEmulatorNoSlash as BackendUrlStatus.Valid).normalizedUrl)
+
+        assertTrue(BackendConfig.validateBaseUrl("http://127.0.0.1:8000/", isDebugBuild = true) is BackendUrlStatus.Valid)
+        assertTrue(BackendConfig.validateBaseUrl("http://localhost:8000/", isDebugBuild = true) is BackendUrlStatus.Valid)
+        assertTrue(BackendConfig.validateBaseUrl("http://192.168.1.50:8000/", isDebugBuild = true) is BackendUrlStatus.Valid)
+        // Debug builds still reject cleartext HTTP for non-local/public domains
+        assertTrue(BackendConfig.validateBaseUrl("http://api.zenoai.example.com/", isDebugBuild = true) is BackendUrlStatus.Invalid)
+
+        // Release builds reject 10.0.2.2, localhost, private IPs, and non-HTTPS URLs
+        assertTrue(BackendConfig.validateBaseUrl("http://10.0.2.2:8000/", isDebugBuild = false) is BackendUrlStatus.Invalid)
+        assertTrue(BackendConfig.validateBaseUrl("http://127.0.0.1:8000/", isDebugBuild = false) is BackendUrlStatus.Invalid)
+        assertTrue(BackendConfig.validateBaseUrl("http://localhost:8000/", isDebugBuild = false) is BackendUrlStatus.Invalid)
+        assertTrue(BackendConfig.validateBaseUrl("https://192.168.1.50:8000/", isDebugBuild = false) is BackendUrlStatus.Invalid)
+        assertTrue(BackendConfig.validateBaseUrl("http://api.zenoai.example.com/", isDebugBuild = false) is BackendUrlStatus.Invalid)
+
+        // Release builds accept valid public HTTPS URLs
+        val validRelease = BackendConfig.validateBaseUrl("https://api.zenoai.example.com", isDebugBuild = false)
+        assertTrue(validRelease is BackendUrlStatus.Valid)
+        assertEquals("https://api.zenoai.example.com/", (validRelease as BackendUrlStatus.Valid).normalizedUrl)
+
+        // Debug BuildConfig default resolves to emulator FastAPI URL http://10.0.2.2:8000/
+        assertEquals("http://10.0.2.2:8000/", BuildConfig.ZENO_API_BASE_URL)
+        assertEquals("http://10.0.2.2:8000/", BackendConfig.resolveValidBaseUrlOrNull())
+        assertNull(BackendConfig.getConfigurationErrorOrNull())
+
+        // Existing network exception mapping preserved
         assertTrue(BackendConfig.mapNetworkException(SocketTimeoutException(), "log in").contains("too long"))
         assertTrue(BackendConfig.mapNetworkException(UnknownHostException(), "log in").contains("resolve"))
         assertTrue(BackendConfig.mapNetworkException(ConnectException(), "log in").contains("offline"))
+    }
+
+    @Test
+    fun debugNetworkSecurityConfigPermitsCleartextOverride() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val parser = app.resources.getXml(R.xml.network_security_config)
+        var foundBaseConfig = false
+        var cleartextPermitted: String? = null
+        var eventType = parser.eventType
+        while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+            if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG && parser.name == "base-config") {
+                foundBaseConfig = true
+                cleartextPermitted = parser.getAttributeValue(null, "cleartextTrafficPermitted")
+            }
+            eventType = parser.next()
+        }
+        assertTrue(foundBaseConfig)
+        assertEquals("true", cleartextPermitted)
     }
 
     @Test

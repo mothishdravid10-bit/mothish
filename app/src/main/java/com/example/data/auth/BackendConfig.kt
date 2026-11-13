@@ -17,7 +17,8 @@ sealed class BackendUrlStatus {
 
 /**
  * Centralized API base URL configuration and network error translator.
- * Strictly prohibits hardcoded emulator (10.0.2.2) or private/localhost URLs in production.
+ * Permits emulator/localhost/private URLs in debug builds for local development,
+ * while strictly requiring public HTTPS URLs in release builds.
  */
 object BackendConfig {
 
@@ -28,7 +29,7 @@ object BackendConfig {
     fun configuredBaseUrl(): String = BuildConfig.ZENO_API_BASE_URL.trim()
 
     fun isPrivateOrEmulatorHost(host: String): Boolean {
-        val h = host.trim().lowercase(Locale.ROOT)
+        val h = host.trim().removePrefix("[").removeSuffix("]").lowercase(Locale.ROOT)
         if (h.isEmpty()) return true
         if (h in setOf("10.0.2.2", "10.0.3.2", "localhost", "127.0.0.1", "0.0.0.0", "::1")) {
             return true
@@ -36,7 +37,10 @@ object BackendConfig {
         return privateIpPattern.matches(h)
     }
 
-    fun validateBaseUrl(rawUrl: String): BackendUrlStatus {
+    fun validateBaseUrl(
+        rawUrl: String,
+        isDebugBuild: Boolean = BuildConfig.DEBUG
+    ): BackendUrlStatus {
         val trimmed = rawUrl.trim()
         if (trimmed.isEmpty() ||
             trimmed.contains("REPLACE_WITH", ignoreCase = true) ||
@@ -63,33 +67,54 @@ object BackendConfig {
             return BackendUrlStatus.Invalid("Configured backend URL is missing a valid domain host.")
         }
 
-        if (isPrivateOrEmulatorHost(host)) {
-            return BackendUrlStatus.Invalid(
-                "Emulator or private backend URL ($host) cannot be reached in production. Please deploy the FastAPI backend and set ZENO_API_BASE_URL to your public HTTPS URL."
-            )
-        }
+        val isLocalOrPrivate = isPrivateOrEmulatorHost(host)
 
-        if (scheme != "https") {
-            return BackendUrlStatus.Invalid(
-                "Production backend connection requires HTTPS (found '$scheme')."
-            )
+        if (!isDebugBuild) {
+            if (isLocalOrPrivate) {
+                return BackendUrlStatus.Invalid(
+                    "Emulator or private backend URL ($host) cannot be reached in production. Please deploy the FastAPI backend and set ZENO_API_BASE_URL to your public HTTPS URL."
+                )
+            }
+            if (scheme != "https") {
+                return BackendUrlStatus.Invalid(
+                    "Production backend connection requires HTTPS (found '$scheme')."
+                )
+            }
+        } else {
+            if (isLocalOrPrivate) {
+                if (scheme !in setOf("http", "https")) {
+                    return BackendUrlStatus.Invalid(
+                        "Local development backend URL must use HTTP or HTTPS (found '$scheme')."
+                    )
+                }
+            } else if (scheme != "https") {
+                return BackendUrlStatus.Invalid(
+                    "Public backend connection requires HTTPS (found '$scheme')."
+                )
+            }
         }
 
         val normalized = if (trimmed.endsWith("/")) trimmed else "$trimmed/"
         return BackendUrlStatus.Valid(normalized)
     }
 
-    fun resolveValidBaseUrlOrNull(overrideUrl: String? = null): String? {
+    fun resolveValidBaseUrlOrNull(
+        overrideUrl: String? = null,
+        isDebugBuild: Boolean = BuildConfig.DEBUG
+    ): String? {
         val candidate = overrideUrl?.trim() ?: configuredBaseUrl()
-        return when (val status = validateBaseUrl(candidate)) {
+        return when (val status = validateBaseUrl(candidate, isDebugBuild)) {
             is BackendUrlStatus.Valid -> status.normalizedUrl
             else -> null
         }
     }
 
-    fun getConfigurationErrorOrNull(overrideUrl: String? = null): String? {
+    fun getConfigurationErrorOrNull(
+        overrideUrl: String? = null,
+        isDebugBuild: Boolean = BuildConfig.DEBUG
+    ): String? {
         val candidate = overrideUrl?.trim() ?: configuredBaseUrl()
-        return when (val status = validateBaseUrl(candidate)) {
+        return when (val status = validateBaseUrl(candidate, isDebugBuild)) {
             is BackendUrlStatus.Valid -> null
             is BackendUrlStatus.NotConfigured -> status.message
             is BackendUrlStatus.Invalid -> status.message

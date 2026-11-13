@@ -12,6 +12,12 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val configuredApiBaseUrl = (
+    project.findProperty("ZENO_API_BASE_URL") as? String
+      ?: System.getenv("ZENO_API_BASE_URL")
+      ?: ""
+  ).trim()
+
   defaultConfig {
     applicationId = "com.aistudio.zenoai.kpmw"
     minSdk = 24
@@ -21,11 +27,6 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    val configuredApiBaseUrl = (
-      project.findProperty("ZENO_API_BASE_URL") as? String
-        ?: System.getenv("ZENO_API_BASE_URL")
-        ?: ""
-    ).trim()
     val escapedApiBaseUrl = configuredApiBaseUrl.replace("\"", "\\\"")
     buildConfigField("String", "ZENO_API_BASE_URL", "\"$escapedApiBaseUrl\"")
   }
@@ -58,6 +59,9 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      val debugApiBaseUrl = configuredApiBaseUrl.ifEmpty { "http://10.0.2.2:8000/" }
+      val escapedDebugApiBaseUrl = debugApiBaseUrl.replace("\"", "\\\"")
+      buildConfigField("String", "ZENO_API_BASE_URL", "\"$escapedDebugApiBaseUrl\"")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
